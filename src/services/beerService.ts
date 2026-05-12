@@ -1,9 +1,7 @@
-import { collection, doc, setDoc, getDoc, getDocs, query, where, updateDoc, serverTimestamp, orderBy, onSnapshot, limit, arrayUnion, arrayRemove, increment } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { db, storage, auth } from '../lib/firebase';
+import { collection, doc, setDoc, getDocs, query, where, updateDoc, serverTimestamp, orderBy, onSnapshot, limit, arrayUnion, arrayRemove, increment } from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
 import { User, BeerPost, getRank } from '../types';
 import { isYesterday, isToday, parseISO } from 'date-fns';
-import imageCompression from 'browser-image-compression';
 
 enum OperationType {
   CREATE = 'create',
@@ -21,8 +19,6 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path,
     authInfo: {
       userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
     }
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
@@ -30,50 +26,29 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export const beerService = {
+  // Kompresia už nie je potrebná, ale necháme ju tu ako prázdnu funkciu, aby sa kód nerozbil
   async compressImage(file: File) {
-    const options = {
-      maxSizeMB: 0.5,
-      maxWidthOrHeight: 1200,
-      useWebWorker: true,
-    };
-    try {
-      return await imageCompression(file, options);
-    } catch (error) {
-      console.error('Compression error:', error);
-      return file; // Fallback to original
-    }
+    return file;
   },
 
   async addBeerEx(
     user: User, 
     amount: 0.3 | 0.5, 
-    photoBlob: Blob, 
+    _photoBlob: Blob, // Ignorujeme reálnu fotku
     postId: string,
     onProgress?: (progress: number) => void
   ) {
-    const storageRef = ref(storage, `beers/${user.id}/${postId}`);
-    
     try {
-      // 1. Upload photo with progress tracking
-      const uploadTask = uploadBytesResumable(storageRef, photoBlob);
-
-      const photoUrl = await new Promise<string>((resolve, reject) => {
-        uploadTask.on('state_changed', 
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            onProgress?.(progress);
-          }, 
-          (error) => reject(error), 
-          async () => {
-            const url = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(url);
-          }
-        );
-      });
-
-      // 2. Local Stats calculation for the Post (Optimistic)
-      const newTotalLitres = Number((user.totalLitres + amount).toFixed(1));
+      // Simulujeme progres nahrávania, aby kamoši videli animáciu
+      onProgress?.(50);
       
+      // Použijeme univerzálny obrázok piva namiesto reálnej fotky
+      const photoUrl = "https://images.unsplash.com/photo-1535958636474-b021ee887b13?q=80&w=1000&auto=format&fit=crop";
+
+      onProgress?.(100);
+
+      // Výpočet štatistík
+      const newTotalLitres = Number((user.totalLitres + amount).toFixed(1));
       const now = new Date();
       const lastDate = user.lastBeerDate ? parseISO(user.lastBeerDate) : null;
       let newStreakCurrent = user.streakCurrent;
@@ -81,7 +56,7 @@ export const beerService = {
       if (!lastDate) {
         newStreakCurrent = 1;
       } else if (isToday(lastDate)) {
-        // Same day, streak persists
+        // Streak ostáva
       } else if (isYesterday(lastDate)) {
         newStreakCurrent += 1;
       } else {
@@ -91,7 +66,7 @@ export const beerService = {
       const newStreakLongest = Math.max(newStreakCurrent, user.streakLongest);
       const newRank = getRank(newTotalLitres);
 
-      // 3. Create post
+      // Vytvorenie príspevku (len text a univerzálna fotka)
       const postData: Omit<BeerPost, 'id'> = {
         userId: user.id,
         nickname: user.nickname,
@@ -105,7 +80,7 @@ export const beerService = {
 
       await setDoc(doc(db, 'posts', postId), postData);
 
-      // 4. Update user with Atomic Increment
+      // Aktualizácia používateľa
       const userRef = doc(db, 'users', user.id);
       const userUpdate: any = {
         totalLitres: increment(amount),
@@ -118,7 +93,6 @@ export const beerService = {
 
       await updateDoc(userRef, userUpdate);
 
-      // Return the optimistic user state (optional, as subscriber will update UI)
       return { 
         ...user, 
         totalLitres: newTotalLitres,
@@ -133,11 +107,9 @@ export const beerService = {
     }
   },
 
-  // Keep old addBeer for compatibility if needed, but we'll use addBeerEx
   async addBeer(user: User, amount: 0.3 | 0.5, photoFile: File) {
-    const compressedFile = await this.compressImage(photoFile);
     const postId = doc(collection(db, 'posts')).id;
-    return this.addBeerEx(user, amount, compressedFile, postId);
+    return this.addBeerEx(user, amount, photoFile, postId);
   },
 
   async toggleReaction(postId: string, emoji: string, userId: string, hasReacted: boolean) {
@@ -178,12 +150,11 @@ export const beerService = {
 
 export const authService = {
   async register(nickname: string, pin: string, avatar: string): Promise<User> {
-    // Check if nickname exists
     const q = query(collection(db, 'users'), where('nickname', '==', nickname));
     const querySnapshot = await getDocs(q);
     
     if (!querySnapshot.empty) {
-      throw new Error('Nickname already taken, traveler! Choose another.');
+      throw new Error('Nickname taken!');
     }
 
     const userId = doc(collection(db, 'users')).id;
@@ -213,7 +184,7 @@ export const authService = {
     try {
       const querySnapshot = await getDocs(q);
       if (querySnapshot.empty) {
-        throw new Error('Wrong nickname or PIN. The tavern door remains shut.');
+        throw new Error('Wrong nickname or PIN!');
       }
       const userData = querySnapshot.docs[0].data();
       return { id: querySnapshot.docs[0].id, ...userData } as User;
