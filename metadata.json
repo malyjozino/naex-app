@@ -1,0 +1,6 @@
+{
+  "name": "NaEx",
+  "description": "A mobile-first social beer tracking app with a dark tavern aesthetic. Compete with friends, track your pints, and climb the global leaderboard.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
